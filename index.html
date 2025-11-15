@@ -3,38 +3,35 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AI 音樂 MV 生成器</title>
+  <title>AI 音樂 MV 生成器 - 歌詞+樂譜</title>
+  <script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.3/build/cjs/vexflow.js"></script>
   <style>
     :root {
-      --primary: #6a1b9a;
-      --accent: #ff4081;
-      --success: #4caf50;
-      --danger: #f44336;
-      --info: #2196F3;
-      --warning: #ff9800;
-      --light: #f8f9fa;
-      --radius: 16px;
+      --primary: #6a1b9a; --accent: #ff4081; --success: #4caf50;
+      --danger: #f44336; --info: #2196F3; --warning: #ff9800;
+      --light: #f8f9fa; --radius: 16px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', -apple-system, sans-serif; background: linear-gradient(135deg, #e3f2fd, #bbdefb); min-height: 100vh; padding: 16px; }
     .container { max-width: 720px; margin: 20px auto; background: white; border-radius: var(--radius); padding: 24px; box-shadow: 0 10px 35px rgba(0,0,0,0.15); }
     h1 { color: var(--primary); text-align: center; font-size: 1.9rem; margin-bottom: 8px; }
     .lang-switch { display: flex; justify-content: center; gap: 8px; margin: 16px 0; }
-    .lang-btn { flex: 1; max-width: 100px; padding: 10px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; transition: all 0.2s; }
+    .lang-btn { flex: 1; max-width: 100px; padding: 10px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; }
     .zh { background: var(--accent); color: white; }
     .en { background: #3f51b5; color: white; }
     .ja { background: var(--warning); color: white; }
     .lang-btn.active { transform: scale(1.08); box-shadow: 0 0 0 3px #ddd; }
-    .mic-btn { width: 100%; padding: 18px; font-size: 1.2rem; font-weight: bold; border: none; border-radius: var(--radius); cursor: pointer; margin: 20px 0; transition: 0.3s; }
+    .mic-btn { width: 100%; padding: 18px; font-size: 1.2rem; font-weight: bold; border: none; border-radius: var(--radius); cursor: pointer; margin: 20px 0; }
     .start { background: var(--info); color: white; }
     .stop { background: var(--danger); color: white; animation: pulse 1.5s infinite; }
-    .disabled { background: #ccc !important; cursor: not-allowed !important; opacity: 0.7; }
+    .disabled { background: #ccc !important; cursor: not-allowed-disabled !important; opacity: 0.7; }
     .file-input { text-align: center; margin: 16px 0; }
     .file-btn { background: var(--primary); color: white; padding: 14px 28px; border-radius: 12px; cursor: pointer; display: inline-block; font-weight: bold; }
     .file-btn input { display: none; }
     .progress { width: 100%; height: 14px; background: #e0e0e0; border-radius: 7px; margin: 20px 0; overflow: hidden; }
     .progress-bar { height: 100%; background: var(--success); width: 0%; transition: width 0.3s ease; }
-    #mvCanvas { width: 100%; border-radius: var(--radius); margin: 24px 0; box-shadow: 0 6px 20px rgba(0,0,0,0.12); background: #000; }
+    #mvCanvas, #score { width: 100%; border-radius: var(--radius); margin: 24px 0; box-shadow: 0 6px 20px rgba(0,0,0,0.12); background: #000; }
+    #lyrics { background: #fff; padding: 16px; border-radius: 12px; margin: 16px 0; font-size: 1.1rem; line-height: 1.8; white-space: pre-wrap; }
     .actions { display: flex; gap: 12px; justify-content: center; margin-top: 20px; }
     .actions button { flex: 1; max-width: 150px; padding: 14px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; }
     .regenerate { background: #607d8b; color: white; }
@@ -79,8 +76,9 @@
     </div>
     <p id="status" style="text-align:center; color:#666; min-height:28px;"></p>
 
+    <div id="lyrics" style="display:none;"></div>
+    <div id="score" style="display:none;"></div>
     <canvas id="mvCanvas" width="640" height="360" style="display:none;"></canvas>
-    <video id="outputVideo" controls style="display:none;"></video>
 
     <div class="actions" id="actions" style="display:none;">
       <button class="regenerate" onclick="regenerate()">重新生成</button>
@@ -96,30 +94,12 @@
     let stream = null;
     let micAccess = false;
     let audioBlob = null;
-    let audioContext, analyser, source, canvas, ctx, animationId;
+    let recognition, audioContext, analyser, pitchData = [], lyrics = '';
 
     const texts = {
-      zh: { 
-        start: "開始唱歌", stop: "停止錄音", select: "從檔案選擇音訊", 
-        generating: "AI 生成 MV 中...", regenerate: "重新生成", share: "分享",
-        test: "測試麥克風中...", ok: "麥克風已就緒！點擊開始", 
-        denied: "麥克風被拒絕！請至瀏覽器設定開啟", error: "無法存取麥克風", 
-        retry: "重新測試", recording: "錄音中... 再次點擊停止"
-      },
-      en: { 
-        start: "Start Singing", stop: "Stop Recording", select: "Select Audio File", 
-        generating: "Generating AI MV...", regenerate: "Regenerate", share: "Share",
-        test: "Testing mic...", ok: "Mic ready! Tap to record", 
-        denied: "Mic blocked! Enable in settings", error: "Cannot access mic", 
-        retry: "Retest", recording: "Recording... Tap to stop"
-      },
-      ja: { 
-        start: "歌い始める", stop: "録音停止", select: "音声ファイルを選択", 
-        generating: "AI MV生成中...", regenerate: "再生成", share: "共有",
-        test: "マイクテスト中...", ok: "マイクOK！タップで録音", 
-        denied: "マイク拒否！設定で許可", error: "マイクアクセス不可", 
-        retry: "再テスト", recording: "録音中... タップで停止"
-      }
+      zh: { start: "開始唱歌", stop: "停止錄音", select: "從檔案選擇音訊", generating: "AI 分析歌詞與樂譜中...", regenerate: "重新生成", share: "分享", test: "測試麥克風中...", ok: "麥克風已就緒！", denied: "麥克風被拒絕！", error: "無法存取麥克風", retry: "重新測試", recording: "錄音+辨識中..." },
+      en: { start: "Start Singing", stop: "Stop Recording", select: "Select Audio File", generating: "Analyzing lyrics & score...", regenerate: "Regenerate", share: "Share", test: "Testing mic...", ok: "Mic ready!", denied: "Mic blocked!", error: "Cannot access mic", retry: "Retest", recording: "Recording & recognizing..." },
+      ja: { start: "歌い始める", stop: "録音停止", select: "音声ファイルを選択", generating: "歌詞と楽譜を分析中...", regenerate: "再生成", share: "共有", test: "マイクテスト中...", ok: "マイクOK！", denied: "マイク拒否！", error: "マイクアクセス不可", retry: "再テスト", recording: "録音と認識中..." }
     };
 
     function $(id) { return document.getElementById(id); }
@@ -169,6 +149,7 @@
       if (isRecording) {
         mediaRecorder.stop();
         stream.getTracks().forEach(t => t.stop());
+        recognition?.stop();
         $('micBtn').classList.remove('stop'); $('micBtn').classList.add('start');
         isRecording = false;
         updateUI();
@@ -177,7 +158,42 @@
         try {
           stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           mediaRecorder = new MediaRecorder(stream);
-          audioChunks = [];
+          audioChunks = []; pitchData = []; lyrics = '';
+
+          // 語音辨識
+          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.lang = currentLang === 'zh' ? 'zh-TW' : currentLang === 'en' ? 'en-US' : 'ja-JP';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.onresult = e => {
+              lyrics = Array.from(e.results).map(r => r[0].transcript).join(' ');
+              $('status').textContent = lyrics;
+            };
+            recognition.start();
+          }
+
+          // 音高偵測
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          analyser = audioContext.createAnalyser();
+          analyser.fftSize = 2048;
+          const source = audioContext.createMediaStreamSource(stream);
+          source.connect(analyser);
+          const bufferLength = analyser.frequencyBinCount;
+          const dataArray = new Uint8Array(bufferLength);
+          const detectPitch = () => {
+            analyser.getByteTimeDomainData(dataArray);
+            let max = 0, index = 0;
+            for (let i = 0; i < bufferLength; i++) {
+              if (dataArray[i] > max) { max = dataArray[i]; index = i; }
+            }
+            const pitch = 44100 / index;
+            if (pitch > 50 && pitch < 1000) pitchData.push(pitch);
+            if (isRecording) requestAnimationFrame(detectPitch);
+          };
+          detectPitch();
+
           mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
           mediaRecorder.onstop = () => {
             audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
@@ -204,113 +220,117 @@
     function generateMV(blob) {
       $('progressContainer').style.display = 'block';
       $('status').textContent = texts[currentLang].generating;
-
-      // 模擬 AI 處理
       let p = 0;
       const int = setInterval(() => {
-        p += 15;
+        p += 20;
         $('progressBar').style.width = p + '%';
         if (p >= 100) {
           clearInterval(int);
           setTimeout(() => {
             $('progressContainer').style.display = 'none';
             $('status').textContent = '';
+            showLyricsAndScore();
             startVisualization(blob);
           }, 600);
         }
       }, 300);
     }
 
+    function showLyricsAndScore() {
+      // 顯示歌詞
+      if (lyrics) {
+        $('lyrics').textContent = lyrics;
+        $('lyrics').style.display = 'block';
+      }
+
+      // 生成五線譜
+      if (pitchData.length > 0) {
+        const div = $('score');
+        div.style.display = 'block';
+        div.innerHTML = '';
+        const VF = Vex.Flow;
+        const renderer = new VF.Renderer(div, VF.Renderer.Backends.SVG);
+        renderer.resize(600, 200);
+        const context = renderer.getContext();
+        const stave = new VF.Stave(10, 40, 580);
+        stave.addClef('treble').addTimeSignature('4/4');
+        stave.setContext(context).draw();
+
+        // 簡化音高轉音符
+        const notes = pitchData.slice(0, 16).map(pitch => {
+          const note = Math.round(12 * (Math.log(pitch / 440) / Math.log(2))) + 69;
+          const octave = Math.floor(note / 12) - 1;
+          const key = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][note % 12];
+          return new VF.StaveNote({ clef: 'treble', keys: [`${key}/${octave}`], duration: 'q' });
+        });
+        const voice = new VF.Voice({ num_beats: 4, beat_value: 4 });
+        voice.addTickables(notes);
+        new VF.Formatter().joinVoices([voice]).format([voice], 500);
+        voice.draw(context, stave);
+      }
+    }
+
     function startVisualization(blob) {
       const canvas = $('mvCanvas');
       canvas.style.display = 'block';
-      ctx = canvas.getContext('2d');
-
+      const ctx = canvas.getContext('2d');
       const audio = new Audio(URL.createObjectURL(blob));
       audio.controls = true;
       audio.style.width = '100%';
       audio.style.margin = '16px 0';
-      $('outputVideo').parentNode.insertBefore(audio, $('outputVideo'));
+      canvas.parentNode.insertBefore(audio, canvas);
 
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      analyser = audioContext.createAnalyser();
+      const actx = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = actx.createAnalyser();
       analyser.fftSize = 256;
+      const source = actx.createMediaElementSource(audio);
+      source.connect(analyser);
+      analyser.connect(actx.destination);
+
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
-
-      const source = audioContext.createMediaElementSource(audio);
-      source.connect(analyser);
-      analyser.connect(audioContext.destination);
-
       let particles = [];
-      function createParticle() {
-        return {
-          x: Math.random() * canvas.width,
-          y: canvas.height,
-          vy: -Math.random() * 3 - 1,
-          size: Math.random() * 3 + 1,
-          color: `hsl(${Math.random()*60 + 200}, 100%, 60%)`
-        };
-      }
 
       function draw() {
         analyser.getByteFrequencyData(dataArray);
         const volume = dataArray.reduce((a,b) => a+b) / bufferLength / 255;
-
         ctx.fillStyle = `rgba(0,0,0,${0.1 + volume*0.3})`;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // 音波
         ctx.lineWidth = 3;
         ctx.strokeStyle = `hsl(${200 + volume*100}, 100%, 60%)`;
         ctx.beginPath();
         for (let i = 0; i < bufferLength; i++) {
-          const v = dataArray[i] / 128.0;
-          const y = v * canvas.height / 3 + canvas.height / 2;
-          if (i === 0) ctx.moveTo(i * canvas.width / bufferLength, y);
-          else ctx.lineTo(i * canvas.width / bufferLength, y);
+          const y = dataArray[i] / 255 * canvas.height / 2;
+          if (i === 0) ctx.moveTo(i * canvas.width / bufferLength, canvas.height / 2 - y);
+          else ctx.lineTo(i * canvas.width / bufferLength, canvas.height / 2 - y);
         }
         ctx.stroke();
 
-        // 粒子
-        if (Math.random() < volume) particles.push(createParticle());
+        if (Math.random() < volume) particles.push({ x: Math.random() * canvas.width, y: canvas.height, vy: -Math.random() * 3 - 1, size: Math.random() * 3 + 1, color: `hsl(${Math.random()*60 + 200}, 100%, 60%)` });
         particles = particles.filter(p => p.y > -10);
         particles.forEach(p => {
-          p.y += p.vy;
-          p.vy *= 0.98;
+          p.y += p.vy; p.vy *= 0.98;
           ctx.fillStyle = p.color;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
-          ctx.fill();
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
         });
 
-        animationId = requestAnimationFrame(draw);
+        requestAnimationFrame(draw);
       }
 
-      audio.onplay = () => { if (audioContext.state === 'suspended') audioContext.resume(); draw(); };
-      audio.onpause = audio.onended = () => cancelAnimationFrame(animationId);
-
+      audio.onplay = () => { if (actx.state === 'suspended') actx.resume(); draw(); };
+      audio.onpause = audio.onended = () => {};
       $('actions').style.display = 'flex';
       audio.play();
     }
 
-    function regenerate() {
-      if (audioBlob) generateMV(audioBlob);
-    }
-
+    function regenerate() { if (audioBlob) generateMV(audioBlob); }
     function share() {
-      if (navigator.share) {
-        navigator.share({ title: '我的 AI 音樂 MV', url: location.href });
-      } else {
-        navigator.clipboard.writeText(location.href);
-        alert('連結已複製！');
-      }
+      if (navigator.share) navigator.share({ title: '我的 AI 音樂 MV', url: location.href });
+      else { navigator.clipboard.writeText(location.href); alert('連結已複製！'); }
     }
 
-    window.onload = () => {
-      updateUI();
-      testMic();
-    };
+    window.onload = () => { updateUI(); testMic(); };
   </script>
 </body>
 </html>

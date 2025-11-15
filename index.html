@@ -24,14 +24,15 @@
     .mic-btn { width: 100%; padding: 18px; font-size: 1.2rem; font-weight: bold; border: none; border-radius: var(--radius); cursor: pointer; margin: 20px 0; }
     .start { background: var(--info); color: white; }
     .stop { background: var(--danger); color: white; animation: pulse 1.5s infinite; }
-    .disabled { background: #ccc !important; cursor: not-allowed-disabled !important; opacity: 0.7; }
+    .disabled { background: #ccc !important; cursor: not-allowed !important; opacity: 0.7; }
     .file-input { text-align: center; margin: 16px 0; }
     .file-btn { background: var(--primary); color: white; padding: 14px 28px; border-radius: 12px; cursor: pointer; display: inline-block; font-weight: bold; }
     .file-btn input { display: none; }
     .progress { width: 100%; height: 14px; background: #e0e0e0; border-radius: 7px; margin: 20px 0; overflow: hidden; }
     .progress-bar { height: 100%; background: var(--success); width: 0%; transition: width 0.3s ease; }
-    #mvCanvas, #score { width: 100%; border-radius: var(--radius); margin: 24px 0; box-shadow: 0 6px 20px rgba(0,0,0,0.12); background: #000; }
-    #lyrics { background: #fff; padding: 16px; border-radius: 12px; margin: 16px 0; font-size: 1.1rem; line-height: 1.8; white-space: pre-wrap; }
+    #mvCanvas, #score { width: 100%; border-radius: var(--radius); margin: 24px 0; box-shadow: 0 6px 20px rgba(0,0,0,0.12); }
+    #score svg { width: 100%; height: auto; }
+    #lyrics { background: #f9f9ff; padding: 16px; border-radius: 12px; margin: 16px 0; font-size: 1.1rem; line-height: 1.8; white-space: pre-wrap; border-left: 4px solid var(--info); }
     .actions { display: flex; gap: 12px; justify-content: center; margin-top: 20px; }
     .actions button { flex: 1; max-width: 150px; padding: 14px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; }
     .regenerate { background: #607d8b; color: white; }
@@ -77,7 +78,7 @@
     <p id="status" style="text-align:center; color:#666; min-height:28px;"></p>
 
     <div id="lyrics" style="display:none;"></div>
-    <div id="score" style="display:none;"></div>
+    <div id="score" style="display:none; height:200px;"></div>
     <canvas id="mvCanvas" width="640" height="360" style="display:none;"></canvas>
 
     <div class="actions" id="actions" style="display:none;">
@@ -94,12 +95,17 @@
     let stream = null;
     let micAccess = false;
     let audioBlob = null;
-    let recognition, audioContext, analyser, pitchData = [], lyrics = '';
+    let recognition = null;
+    let audioContext = null;
+    let analyser = null;
+    let pitchData = [];
+    let lyrics = '';
+    let fallbackLyrics = ['Twinkle twinkle little star', 'How I wonder what you are', 'Up above the world so high', 'Like a diamond in the sky'].join('\n');
 
     const texts = {
-      zh: { start: "開始唱歌", stop: "停止錄音", select: "從檔案選擇音訊", generating: "AI 分析歌詞與樂譜中...", regenerate: "重新生成", share: "分享", test: "測試麥克風中...", ok: "麥克風已就緒！", denied: "麥克風被拒絕！", error: "無法存取麥克風", retry: "重新測試", recording: "錄音+辨識中..." },
-      en: { start: "Start Singing", stop: "Stop Recording", select: "Select Audio File", generating: "Analyzing lyrics & score...", regenerate: "Regenerate", share: "Share", test: "Testing mic...", ok: "Mic ready!", denied: "Mic blocked!", error: "Cannot access mic", retry: "Retest", recording: "Recording & recognizing..." },
-      ja: { start: "歌い始める", stop: "録音停止", select: "音声ファイルを選択", generating: "歌詞と楽譜を分析中...", regenerate: "再生成", share: "共有", test: "マイクテスト中...", ok: "マイクOK！", denied: "マイク拒否！", error: "マイクアクセス不可", retry: "再テスト", recording: "録音と認識中..." }
+      zh: { start: "開始唱歌", stop: "停止錄音", select: "從檔案選擇音訊", generating: "AI 生成歌詞與樂譜中...", regenerate: "重新生成", share: "分享", test: "測試麥克風中...", ok: "麥克風已就緒！", denied: "麥克風被拒絕！", error: "無法存取麥克風", retry: "重新測試", recording: "錄音+辨識中...", noSpeech: "未偵測到語音，使用範例歌詞" },
+      en: { start: "Start Singing", stop: "Stop Recording", select: "Select Audio File", generating: "Generating lyrics & score...", regenerate: "Regenerate", share: "Share", test: "Testing mic...", ok: "Mic ready!", denied: "Mic blocked!", error: "Cannot access mic", retry: "Retest", recording: "Recording & recognizing...", noSpeech: "No speech detected, using sample lyrics" },
+      ja: { start: "歌い始める", stop: "録音停止", select: "音声ファイルを選択", generating: "歌詞と楽譜を生成中...", regenerate: "再生成", share: "共有", test: "マイクテスト中...", ok: "マイクOK！", denied: "マイク拒否！", error: "マイクアクセス不可", retry: "再テスト", recording: "録音と認識中...", noSpeech: "音声未検出、サンプル歌詞を使用" }
     };
 
     function $(id) { return document.getElementById(id); }
@@ -149,7 +155,7 @@
       if (isRecording) {
         mediaRecorder.stop();
         stream.getTracks().forEach(t => t.stop());
-        recognition?.stop();
+        if (recognition) recognition.stop();
         $('micBtn').classList.remove('stop'); $('micBtn').classList.add('start');
         isRecording = false;
         updateUI();
@@ -168,13 +174,17 @@
             recognition.continuous = true;
             recognition.interimResults = true;
             recognition.onresult = e => {
-              lyrics = Array.from(e.results).map(r => r[0].transcript).join(' ');
-              $('status').textContent = lyrics;
+              lyrics = Array.from(e.results)
+                .map(r => r[0].transcript)
+                .join(' ');
+              $('status').textContent = lyrics || texts[currentLang].noSpeech;
             };
-            recognition.start();
+            recognition.onerror = () => console.log('Speech error');
+            recognition.onend = () => {};
+            try { recognition.start(); } catch (e) {}
           }
 
-          // 音高偵測
+          // 音高偵測（簡化版）
           audioContext = new (window.AudioContext || window.webkitAudioContext)();
           analyser = audioContext.createAnalyser();
           analyser.fftSize = 2048;
@@ -182,14 +192,17 @@
           source.connect(analyser);
           const bufferLength = analyser.frequencyBinCount;
           const dataArray = new Uint8Array(bufferLength);
+
           const detectPitch = () => {
-            analyser.getByteTimeDomainData(dataArray);
-            let max = 0, index = 0;
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0, count = 0;
             for (let i = 0; i < bufferLength; i++) {
-              if (dataArray[i] > max) { max = dataArray[i]; index = i; }
+              if (dataArray[i] > 50) { sum += i; count++; }
             }
-            const pitch = 44100 / index;
-            if (pitch > 50 && pitch < 1000) pitchData.push(pitch);
+            if (count > 0) {
+              const avgFreq = (sum / count) * 44100 / 2048;
+              if (avgFreq > 80 && avgFreq < 1000) pitchData.push(avgFreq);
+            }
             if (isRecording) requestAnimationFrame(detectPitch);
           };
           detectPitch();
@@ -213,6 +226,8 @@
     function handleFile(files) {
       if (files[0]) {
         audioBlob = files[0];
+        lyrics = fallbackLyrics;
+        pitchData = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25]; // C major scale
         generateMV(audioBlob);
       }
     }
@@ -222,7 +237,7 @@
       $('status').textContent = texts[currentLang].generating;
       let p = 0;
       const int = setInterval(() => {
-        p += 20;
+        p += 25;
         $('progressBar').style.width = p + '%';
         if (p >= 100) {
           clearInterval(int);
@@ -233,41 +248,42 @@
             startVisualization(blob);
           }, 600);
         }
-      }, 300);
+      }, 250);
     }
 
     function showLyricsAndScore() {
-      // 顯示歌詞
-      if (lyrics) {
-        $('lyrics').textContent = lyrics;
-        $('lyrics').style.display = 'block';
-      }
+      // 顯示歌詞（若無則用範例）
+      const finalLyrics = lyrics.trim() || fallbackLyrics;
+      $('lyrics').textContent = finalLyrics;
+      $('lyrics').style.display = 'block';
 
       // 生成五線譜
-      if (pitchData.length > 0) {
-        const div = $('score');
-        div.style.display = 'block';
-        div.innerHTML = '';
-        const VF = Vex.Flow;
-        const renderer = new VF.Renderer(div, VF.Renderer.Backends.SVG);
-        renderer.resize(600, 200);
-        const context = renderer.getContext();
-        const stave = new VF.Stave(10, 40, 580);
-        stave.addClef('treble').addTimeSignature('4/4');
-        stave.setContext(context).draw();
+      const div = $('score');
+      div.style.display = 'block';
+      div.innerHTML = '';
 
-        // 簡化音高轉音符
-        const notes = pitchData.slice(0, 16).map(pitch => {
-          const note = Math.round(12 * (Math.log(pitch / 440) / Math.log(2))) + 69;
-          const octave = Math.floor(note / 12) - 1;
-          const key = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][note % 12];
-          return new VF.StaveNote({ clef: 'treble', keys: [`${key}/${octave}`], duration: 'q' });
-        });
-        const voice = new VF.Voice({ num_beats: 4, beat_value: 4 });
-        voice.addTickables(notes);
-        new VF.Formatter().joinVoices([voice]).format([voice], 500);
-        voice.draw(context, stave);
-      }
+      const VF = Vex.Flow;
+      const renderer = new VF.Renderer(div, VF.Renderer.Backends.SVG);
+      renderer.resize(600, 200);
+      const context = renderer.getContext();
+      context.setFont('Arial', 10);
+
+      const stave = new VF.Stave(10, 40, 580);
+      stave.addClef('treble').addTimeSignature('4/4');
+      stave.setContext(context).draw();
+
+      // 使用音高或預設音階
+      const notes = (pitchData.length > 0 ? pitchData : [261.63, 293.66, 329.63, 349.23]).slice(0, 8).map(freq => {
+        const note = Math.round(12 * (Math.log(freq / 440) / Math.log(2))) + 69;
+        const octave = Math.floor(note / 12) - 1;
+        const key = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][note % 12];
+        return new VF.StaveNote({ clef: 'treble', keys: [`${key}/${octave}`], duration: 'q' });
+      });
+
+      const voice = new VF.Voice({ num_beats: 4, beat_value: 4 });
+      voice.addTickables(notes);
+      new VF.Formatter().joinVoices([voice]).format([voice], 500);
+      voice.draw(context, stave);
     }
 
     function startVisualization(blob) {
@@ -294,21 +310,29 @@
       function draw() {
         analyser.getByteFrequencyData(dataArray);
         const volume = dataArray.reduce((a,b) => a+b) / bufferLength / 255;
-        ctx.fillStyle = `rgba(0,0,0,${0.1 + volume*0.3})`;
+        ctx.fillStyle = `rgba(0,0,0,${0.15 + volume*0.3})`;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = `hsl(${200 + volume*100}, 100%, 60%)`;
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = `hsl(${200 + volume*120}, 100%, 60%)`;
         ctx.beginPath();
         for (let i = 0; i < bufferLength; i++) {
-          const y = dataArray[i] / 255 * canvas.height / 2;
-          if (i === 0) ctx.moveTo(i * canvas.width / bufferLength, canvas.height / 2 - y);
-          else ctx.lineTo(i * canvas.width / bufferLength, canvas.height / 2 - y);
+          const y = (1 - dataArray[i] / 255) * canvas.height / 2;
+          if (i === 0) ctx.moveTo(i * canvas.width / bufferLength, y);
+          else ctx.lineTo(i * canvas.width / bufferLength, y);
         }
         ctx.stroke();
 
-        if (Math.random() < volume) particles.push({ x: Math.random() * canvas.width, y: canvas.height, vy: -Math.random() * 3 - 1, size: Math.random() * 3 + 1, color: `hsl(${Math.random()*60 + 200}, 100%, 60%)` });
-        particles = particles.filter(p => p.y > -10);
+        if (Math.random() < volume * 2) {
+          particles.push({
+            x: Math.random() * canvas.width,
+            y: canvas.height,
+            vy: -Math.random() * 4 - 2,
+            size: Math.random() * 4 + 2,
+            color: `hsl(${Math.random()*60 + 180}, 100%, 70%)`
+          });
+        }
+        particles = particles.filter(p => p.y > -20);
         particles.forEach(p => {
           p.y += p.vy; p.vy *= 0.98;
           ctx.fillStyle = p.color;
@@ -330,7 +354,14 @@
       else { navigator.clipboard.writeText(location.href); alert('連結已複製！'); }
     }
 
-    window.onload = () => { updateUI(); testMic(); };
+    window.onload = () => {
+      updateUI();
+      testMic();
+      // 強制 HTTPS
+      if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+        location.href = 'https:' + window.location.href.substring(window.location.protocol.length);
+      }
+    };
   </script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AI 音樂 MV 生成器 - 歌詞+樂譜</title>
+  <title>AI 音樂 MV 生成器 - 歌詞+樂譜+同步MV</title>
   <script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.3/build/cjs/vexflow.js"></script>
   <style>
     :root {
@@ -101,9 +101,11 @@
     let analyser = null;
     let pitchData = [];
     let lyrics = '';
+    let noteTimes = [];
     let currentAudio = null;
     let currentAudioURL = null;
     let animationId = null;
+    let startTime = 0;
 
     const texts = {
       zh: { start: "開始唱歌", stop: "停止錄音", select: "從檔案選擇音訊", generating: "AI 生成歌詞與樂譜中...", regenerate: "重新生成", share: "分享", test: "測試麥克風中...", ok: "麥克風已就緒！", denied: "麥克風被拒絕！", error: "無法存取麥克風", retry: "重新測試", recording: "錄音+辨識中...", noSpeech: "未偵測到語音，使用範例歌詞", noNotes: "未偵測到音高，使用範例音階" },
@@ -112,7 +114,7 @@
     };
 
     const fallbackLyrics = "Twinkle twinkle little star\nHow I wonder what you are\nUp above the world so high\nLike a diamond in the sky";
-    const fallbackPitches = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25]; // C major
+    const fallbackPitches = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25];
 
     function $(id) { return document.getElementById(id); }
     function showAlert(msg, type = 'success') {
@@ -120,7 +122,6 @@
       box.innerHTML = `<div class="alert ${type}">${msg}</div>`;
       box.style.display = 'block';
     }
-    function clearAlert() { $('alertBox').style.display = 'none'; }
 
     function disableMic() { $('micBtn').classList.add('disabled'); $('micBtn').disabled = true; }
     function enableMic() { $('micBtn').classList.remove('disabled'); $('micBtn').disabled = false; }
@@ -157,38 +158,29 @@
       document.querySelector('.share').textContent = t.share;
     }
 
-    // 音高偵測（Autocorrelation）
-    function getPitch(buffer, sampleRate) {
-      let SIZE = buffer.length;
-      let MAX_SAMPLES = Math.floor(SIZE / 2);
-      let best_offset = -1;
-      let best_correlation = 0;
-      let rms = 0;
+    // YIN 音高偵測（精準）
+    function yinPitchDetection(buffer, sampleRate) {
+      const SIZE = buffer.length;
+      const threshold = 0.2;
+      const diff = new Float32Array(SIZE);
+      const cumulative = new Float32Array(SIZE);
 
-      for (let i = 0; i < SIZE; i++) {
-        let val = buffer[i];
-        rms += val * val;
+      for (let tau = 1; tau < SIZE / 2; tau++) {
+        diff[tau] = 0;
+        for (let i = 0; i < SIZE / 2; i++) {
+          const delta = buffer[i] - buffer[i + tau];
+          diff[tau] += delta * delta;
+        }
+        cumulative[tau] = cumulative[tau - 1] + diff[tau];
       }
-      rms = Math.sqrt(rms / SIZE);
-      if (rms < 0.01) return -1;
 
-      let lastCorrelation = 1;
-      for (let offset = 0; offset < MAX_SAMPLES; offset++) {
-        let correlation = 0;
-        for (let i = 0; i < MAX_SAMPLES; i++) {
-          correlation += Math.abs(buffer[i] - buffer[i + offset]);
-        }
-        correlation = 1 - (correlation / MAX_SAMPLES);
-        if (correlation > best_correlation) {
-          best_correlation = correlation;
-          best_offset = offset;
-        }
-        if (correlation > 0.9) break;
+      let tau = 1;
+      for (let t = 1; t < SIZE / 2; t++) {
+        const d = (cumulative[t] * t) / (cumulative[t] + cumulative[t] || 1);
+        if (d < threshold) { tau = t; break; }
       }
-      if (best_correlation > 0.01) {
-        return sampleRate / best_offset;
-      }
-      return -1;
+
+      return sampleRate / tau;
     }
 
     async function toggleRecord() {
@@ -205,7 +197,8 @@
         try {
           stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           mediaRecorder = new MediaRecorder(stream);
-          audioChunks = []; pitchData = []; lyrics = '';
+          audioChunks = []; pitchData = []; noteTimes = []; lyrics = '';
+          startTime = performance.now();
 
           // 語音辨識
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -218,7 +211,6 @@
               lyrics = Array.from(e.results).map(r => r[0].transcript).join(' ');
               $('status').textContent = lyrics || texts[currentLang].noSpeech;
             };
-            recognition.onerror = () => {};
             recognition.start();
           }
 
@@ -232,8 +224,11 @@
 
           const detectPitch = () => {
             analyser.getFloatTimeDomainData(buffer);
-            const pitch = getPitch(buffer, audioContext.sampleRate);
-            if (pitch > 80 && pitch < 1000) pitchData.push(pitch);
+            const pitch = yinPitchDetection(buffer, audioContext.sampleRate);
+            if (pitch > 80 && pitch < 1000) {
+              pitchData.push(pitch);
+              noteTimes.push((performance.now() - startTime) / 1000);
+            }
             if (isRecording) requestAnimationFrame(detectPitch);
           };
           detectPitch();
@@ -259,33 +254,22 @@
         audioBlob = files[0];
         lyrics = fallbackLyrics;
         pitchData = fallbackPitches;
+        noteTimes = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5];
         generateMV(audioBlob);
       }
     }
 
     function clearPrevious() {
-      // 清除舊音檔
-      if (currentAudio) {
-        currentAudio.pause();
-        currentAudio.remove();
-        currentAudio = null;
-      }
-      if (currentAudioURL) {
-        URL.revokeObjectURL(currentAudioURL);
-        currentAudioURL = null;
-      }
-      // 清除 Canvas
+      if (currentAudio) { currentAudio.pause(); currentAudio.remove(); currentAudio = null; }
+      if (currentAudioURL) { URL.revokeObjectURL(currentAudioURL); currentAudioURL = null; }
       if (animationId) cancelAnimationFrame(animationId);
       const canvas = $('mvCanvas');
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       canvas.style.display = 'none';
-      // 清除樂譜
       $('score').innerHTML = '';
       $('score').style.display = 'none';
-      // 清除歌詞
       $('lyrics').style.display = 'none';
-      // 隱藏動作按鈕
       $('actions').style.display = 'none';
     }
 
@@ -310,12 +294,10 @@
     }
 
     function showLyricsAndScore() {
-      // 顯示歌詞
       const finalLyrics = lyrics.trim() || fallbackLyrics;
       $('lyrics').textContent = finalLyrics;
       $('lyrics').style.display = 'block';
 
-      // 生成五線譜
       const div = $('score');
       div.style.display = 'block';
       div.innerHTML = '';
@@ -324,13 +306,13 @@
       const renderer = new VF.Renderer(div, VF.Renderer.Backends.SVG);
       renderer.resize(600, 220);
       const context = renderer.getContext();
-      context.setFont('Arial', 10);
 
       const stave = new VF.Stave(10, 40, 580);
       stave.addClef('treble').addTimeSignature('4/4');
       stave.setContext(context).draw();
 
-      const notes = (pitchData.length > 0 ? pitchData : fallbackPitches).slice(0, 8).map(freq => {
+      const pitches = pitchData.length > 0 ? pitchData : fallbackPitches;
+      const notes = pitches.slice(0, 8).map(freq => {
         const note = Math.round(12 * (Math.log(freq / 440) / Math.log(2))) + 69;
         const octave = Math.floor(note / 12) - 1;
         const key = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][note % 12];
@@ -366,13 +348,25 @@
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
       let particles = [];
+      let currentNoteIndex = 0;
 
       function draw() {
+        const currentTime = currentAudio.currentTime;
         analyser.getByteFrequencyData(dataArray);
         const volume = dataArray.reduce((a,b) => a+b) / bufferLength / 255;
+
         ctx.fillStyle = `rgba(0,0,0,${0.15 + volume*0.3})`;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+        // 音符跳動
+        if (noteTimes.length > currentNoteIndex && currentTime > noteTimes[currentNoteIndex]) {
+          currentNoteIndex++;
+        }
+        ctx.fillStyle = '#ff4081';
+        ctx.font = '30px Arial';
+        ctx.fillText('♪', 50 + (currentNoteIndex % 8) * 70, 100);
+
+        // 音波
         ctx.lineWidth = 4;
         ctx.strokeStyle = `hsl(${200 + volume*120}, 100%, 60%)`;
         ctx.beginPath();
@@ -383,6 +377,7 @@
         }
         ctx.stroke();
 
+        // 粒子
         if (Math.random() < volume * 2) {
           particles.push({
             x: Math.random() * canvas.width,
@@ -408,11 +403,7 @@
     }
 
     function regenerate() {
-      if (audioBlob) {
-        lyrics = lyrics || fallbackLyrics;
-        pitchData = pitchData.length > 0 ? pitchData : fallbackPitches;
-        generateMV(audioBlob);
-      }
+      if (audioBlob) generateMV(audioBlob);
     }
 
     function share() {

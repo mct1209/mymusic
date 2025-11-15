@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AI 音樂 MV 生成器 - 歌詞+樂譜+同步MV</title>
+  <title>AI 音樂 MV 生成器 - 真實音高+歌詞+同步MV</title>
   <script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.3/build/cjs/vexflow.js"></script>
   <style>
     :root {
       --primary: #6a1b9a; --accent: #ff4081; --success: #4caf50;
       --danger: #f44336; --info: #2196F3; --warning: #ff9800;
-      --light: #f8f9fa; --radius: 16px;
+      --radius: 16px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', -apple-system, sans-serif; background: linear-gradient(135deg, #e3f2fd, #bbdefb); min-height: 100vh; padding: 16px; }
@@ -83,7 +83,7 @@
     <div id="audioContainer"></div>
 
     <div class="actions" id="actions" style="display:none;">
-      <button class="regenerate" onclick="regenerate()">重新生成</button>
+      <button class="regenerate" onclick binge="regenerate()">重新生成</button>
       <button class="share" onclick="share()">分享</button>
     </div>
   </div>
@@ -101,20 +101,18 @@
     let analyser = null;
     let pitchData = [];
     let lyrics = '';
-    let noteTimes = [];
     let currentAudio = null;
     let currentAudioURL = null;
     let animationId = null;
-    let startTime = 0;
 
     const texts = {
-      zh: { start: "開始唱歌", stop: "停止錄音", select: "從檔案選擇音訊", generating: "AI 生成歌詞與樂譜中...", regenerate: "重新生成", share: "分享", test: "測試麥克風中...", ok: "麥克風已就緒！", denied: "麥克風被拒絕！", error: "無法存取麥克風", retry: "重新測試", recording: "錄音+辨識中...", noSpeech: "未偵測到語音，使用範例歌詞", noNotes: "未偵測到音高，使用範例音階" },
-      en: { start: "Start Singing", stop: "Stop Recording", select: "Select Audio File", generating: "Generating lyrics & score...", regenerate: "Regenerate", share: "Share", test: "Testing mic...", ok: "Mic ready!", denied: "Mic blocked!", error: "Cannot access mic", retry: "Retest", recording: "Recording & recognizing...", noSpeech: "No speech detected, using sample lyrics", noNotes: "No pitch detected, using sample scale" },
-      ja: { start: "歌い始める", stop: "録音停止", select: "音声ファイルを選択", generating: "歌詞と楽譜を生成中...", regenerate: "再生成", share: "共有", test: "マイクテスト中...", ok: "マイクOK！", denied: "マイク拒否！", error: "マイクアクセス不可", retry: "再テスト", recording: "録音と認識中...", noSpeech: "音声未検出、サンプル歌詞を使用", noNotes: "音高未検出、サンプル音階を使用" }
+      zh: { start: "開始唱歌", stop: "停止錄音", select: "從檔案選擇音訊", generating: "AI 生成中...", regenerate: "重新生成", share: "分享", test: "測試麥克風中...", ok: "麥克風已就緒！", denied: "麥克風被拒絕！", error: "無法存取麥克風", retry: "重新測試", recording: "錄音+辨識中...", noSpeech: "未偵測到語音，使用範例" },
+      en: { start: "Start Singing", stop: "Stop Recording", select: "Select Audio File", generating: "Generating...", regenerate: "Regenerate", share: "Share", test: "Testing mic...", ok: "Mic ready!", denied: "Mic blocked!", error: "Cannot access mic", retry: "Retest", recording: "Recording...", noSpeech: "No speech, using sample" },
+      ja: { start: "歌い始める", stop: "録音停止", select: "音声ファイルを選択", generating: "生成中...", regenerate: "再生成", share: "共有", test: "マイクテスト中...", ok: "マイクOK！", denied: "マイク拒否！", error: "マイクアクセス不可", retry: "再テスト", recording: "録音中...", noSpeech: "音声なし、サンプル使用" }
     };
 
-    const fallbackLyrics = "Twinkle twinkle little star\nHow I wonder what you are\nUp above the world so high\nLike a diamond in the sky";
-    const fallbackPitches = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25];
+    const fallbackLyrics = "Do Re Mi Fa So La Ti Do";
+    const fallbackPitches = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25]; // C major
 
     function $(id) { return document.getElementById(id); }
     function showAlert(msg, type = 'success') {
@@ -158,31 +156,6 @@
       document.querySelector('.share').textContent = t.share;
     }
 
-    // YIN 音高偵測（精準）
-    function yinPitchDetection(buffer, sampleRate) {
-      const SIZE = buffer.length;
-      const threshold = 0.2;
-      const diff = new Float32Array(SIZE);
-      const cumulative = new Float32Array(SIZE);
-
-      for (let tau = 1; tau < SIZE / 2; tau++) {
-        diff[tau] = 0;
-        for (let i = 0; i < SIZE / 2; i++) {
-          const delta = buffer[i] - buffer[i + tau];
-          diff[tau] += delta * delta;
-        }
-        cumulative[tau] = cumulative[tau - 1] + diff[tau];
-      }
-
-      let tau = 1;
-      for (let t = 1; t < SIZE / 2; t++) {
-        const d = (cumulative[t] * t) / (cumulative[t] + cumulative[t] || 1);
-        if (d < threshold) { tau = t; break; }
-      }
-
-      return sampleRate / tau;
-    }
-
     async function toggleRecord() {
       if (isRecording) {
         mediaRecorder.stop();
@@ -197,8 +170,7 @@
         try {
           stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           mediaRecorder = new MediaRecorder(stream);
-          audioChunks = []; pitchData = []; noteTimes = []; lyrics = '';
-          startTime = performance.now();
+          audioChunks = []; pitchData = []; lyrics = '';
 
           // 語音辨識
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -214,20 +186,23 @@
             recognition.start();
           }
 
-          // 音高偵測
+          // 音高偵測（穩定版）
           audioContext = new (window.AudioContext || window.webkitAudioContext)();
           analyser = audioContext.createAnalyser();
           analyser.fftSize = 2048;
           const source = audioContext.createMediaStreamSource(stream);
           source.connect(analyser);
-          const buffer = new Float32Array(analyser.fftSize);
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
           const detectPitch = () => {
-            analyser.getFloatTimeDomainData(buffer);
-            const pitch = yinPitchDetection(buffer, audioContext.sampleRate);
-            if (pitch > 80 && pitch < 1000) {
-              pitchData.push(pitch);
-              noteTimes.push((performance.now() - startTime) / 1000);
+            analyser.getByteFrequencyData(dataArray);
+            let max = 0, index = 0;
+            for (let i = 5; i < dataArray.length; i++) {
+              if (dataArray[i] > max) { max = dataArray[i]; index = i; }
+            }
+            if (max > 100) {
+              const freq = index * audioContext.sampleRate / analyser.fftSize;
+              if (freq > 80 && freq < 1000) pitchData.push(freq);
             }
             if (isRecording) requestAnimationFrame(detectPitch);
           };
@@ -254,7 +229,6 @@
         audioBlob = files[0];
         lyrics = fallbackLyrics;
         pitchData = fallbackPitches;
-        noteTimes = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5];
         generateMV(audioBlob);
       }
     }
@@ -271,6 +245,7 @@
       $('score').style.display = 'none';
       $('lyrics').style.display = 'none';
       $('actions').style.display = 'none';
+      $('audioContainer').innerHTML = '';
     }
 
     function generateMV(blob) {
@@ -311,13 +286,16 @@
       stave.addClef('treble').addTimeSignature('4/4');
       stave.setContext(context).draw();
 
+      // 強制至少 8 個音符
       const pitches = pitchData.length > 0 ? pitchData : fallbackPitches;
-      const notes = pitches.slice(0, 8).map(freq => {
+      const notes = [];
+      for (let i = 0; i < 8; i++) {
+        const freq = pitches[i % pitches.length];
         const note = Math.round(12 * (Math.log(freq / 440) / Math.log(2))) + 69;
         const octave = Math.floor(note / 12) - 1;
         const key = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][note % 12];
-        return new VF.StaveNote({ clef: 'treble', keys: [`${key}/${octave}`], duration: 'q' });
-      });
+        notes.push(new VF.StaveNote({ clef: 'treble', keys: [`${key}/${octave}`], duration: 'q' }));
+      }
 
       const voice = new VF.Voice({ num_beats: 4, beat_value: 4 });
       voice.addTickables(notes);
@@ -347,11 +325,9 @@
 
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
-      let particles = [];
-      let currentNoteIndex = 0;
+      let noteIndex = 0;
 
       function draw() {
-        const currentTime = currentAudio.currentTime;
         analyser.getByteFrequencyData(dataArray);
         const volume = dataArray.reduce((a,b) => a+b) / bufferLength / 255;
 
@@ -359,12 +335,10 @@
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         // 音符跳動
-        if (noteTimes.length > currentNoteIndex && currentTime > noteTimes[currentNoteIndex]) {
-          currentNoteIndex++;
-        }
+        if (currentAudio.currentTime > noteIndex * 0.5) noteIndex++;
         ctx.fillStyle = '#ff4081';
-        ctx.font = '30px Arial';
-        ctx.fillText('♪', 50 + (currentNoteIndex % 8) * 70, 100);
+        ctx.font = '40px Arial';
+        ctx.fillText('Note', 50 + (noteIndex % 8) * 70, 120);
 
         // 音波
         ctx.lineWidth = 4;
@@ -376,23 +350,6 @@
           else ctx.lineTo(i * canvas.width / bufferLength, y);
         }
         ctx.stroke();
-
-        // 粒子
-        if (Math.random() < volume * 2) {
-          particles.push({
-            x: Math.random() * canvas.width,
-            y: canvas.height,
-            vy: -Math.random() * 4 - 2,
-            size: Math.random() * 4 + 2,
-            color: `hsl(${Math.random()*60 + 180}, 100%, 70%)`
-          });
-        }
-        particles = particles.filter(p => p.y > -20);
-        particles.forEach(p => {
-          p.y += p.vy; p.vy *= 0.98;
-          ctx.fillStyle = p.color;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
-        });
 
         animationId = requestAnimationFrame(draw);
       }
